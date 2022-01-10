@@ -3,6 +3,10 @@ import os
 import argparse
 from network_model import model
 from aux_functions import *
+import torch
+import torchvision
+from torchvision.models.detection.faster_rcnn import FastRCNNPredictor
+import torchvision.transforms as transforms
 
 # Suppress TF warnings
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
@@ -24,6 +28,22 @@ def get_mouse_points(event, x, y, flags, param):
         print(mouse_pts)
 
 
+def get_detection_model(num_classes):
+    # load a model pre-trained pre-trained on COCO
+    model = torchvision.models.detection.fasterrcnn_resnet50_fpn(pretrained=True)
+    #model = torchvision.models.detection.fasterrcnn_mobilenet_v3_large_320_fpn(pretrained=True)
+
+    # replace the classifier with a new one, that has
+    # num_classes which is user-defined
+    num_classes = 2  # 1 class (person) + background
+    # get number of input features for the classifier
+    in_features = model.roi_heads.box_predictor.cls_score.in_features
+    # replace the pre-trained head with a new one
+    model.roi_heads.box_predictor = FastRCNNPredictor(in_features, num_classes)
+
+    return model
+
+
 # Command-line input setup
 parser = argparse.ArgumentParser(description="SocialDistancing")
 parser.add_argument(
@@ -31,20 +51,31 @@ parser.add_argument(
 )
 args = parser.parse_args()
 
+device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
 input_video = args.videopath
 
 # Define a DNN model
-DNN = model()
+model = get_detection_model(2)
+checkpoint = torch.load(
+    'fasterrcnn.pth',
+    map_location=device
+)
+model.load_state_dict(checkpoint['model_state_dict'])
+model.eval()
+#model.to(device)
+
 # Get video handle
 cap = cv2.VideoCapture(input_video)
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 fps = int(cap.get(cv2.CAP_PROP_FPS))
 
-scale_w = 1.2 / 2
-scale_h = 4 / 2
+scale_w = 1.0 / 2
+scale_h = 1.0 / 2
 
 SOLID_BACK_COLOR = (41, 41, 41)
+SCORE_THRESHOLD = 0.25
 # Setuo video writer
 fourcc = cv2.VideoWriter_fourcc(*"XVID")
 output_movie = cv2.VideoWriter("Pedestrian_detect.avi", fourcc, fps, (width, height))
@@ -114,7 +145,12 @@ while cap.isOpened():
     cv2.polylines(frame, [pts], True, (0, 255, 255), thickness=4)
 
     # Detect person and bounding boxes using DNN
-    pedestrian_boxes, num_pedestrians = DNN.detect_pedestrians(frame)
+    #pedestrian_boxes, num_pedestrians = DNN.detect_pedestrians(frame)
+    with torch.no_grad():
+        img = torch.unsqueeze(transforms.ToTensor()(frame), dim=0)
+        prediction = model(img)
+        pedestrian_boxes = prediction[0]['boxes'][prediction[0]['scores'] > SCORE_THRESHOLD].tolist()
+        num_pedestrians = len(pedestrian_boxes)
 
     if len(pedestrian_boxes) > 0:
         pedestrian_detect = plot_pedestrian_boxes_on_image(frame, pedestrian_boxes)
@@ -147,7 +183,7 @@ while cap.isOpened():
     text = "Social-distancing Index: " + str(np.round(100 * sc_index, 1)) + "%"
     pedestrian_detect, last_h = put_text(pedestrian_detect, text, text_offset_y=last_h)
 
-    cv2.imshow("Street Cam", pedestrian_detect)
-    cv2.waitKey(1)
+    #cv2.imshow("Street Cam", pedestrian_detect)
+    #cv2.waitKey(1)
     output_movie.write(pedestrian_detect)
     bird_movie.write(bird_image)

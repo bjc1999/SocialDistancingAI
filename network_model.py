@@ -50,7 +50,7 @@ class model:
         classes = np.squeeze(classes).astype(np.int32)
         boxes = np.squeeze(boxes)
         scores = np.squeeze(scores)
-        pedestrian_score_threshold = 0.35
+        pedestrian_score_threshold = 0.25
         pedestrian_boxes = []
         total_pedestrians = 0
         for i in range(int(num[0])):
